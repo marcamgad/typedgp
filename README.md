@@ -1,4 +1,4 @@
-﻿# TypedGP
+# TypedGP
 
 [![CI](https://github.com/marcamgad/typedgp/actions/workflows/ci.yml/badge.svg)](https://github.com/marcamgad/typedgp/actions/workflows/ci.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)

@@ -1,0 +1,14 @@
+# Normalise line endings, and pin the files a Windows editor is most
+# likely to rewrite with a byte-order mark.
+#
+# A BOM on typedgp.cabal is fatal: cabal reports
+# "cabal-version should be at the beginning of the file" and refuses to
+# parse the package at all, which takes down every CI stage that touches
+# the manifest. It happened once, from a PowerShell 5.1 `Set-Content
+# -Encoding utf8` (which writes a BOM; PowerShell 6+ does not).
+* text=auto eol=lf
+
+*.hs   text eol=lf
+*.cabal text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf

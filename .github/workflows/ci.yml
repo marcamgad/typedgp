@@ -12,14 +12,19 @@ jobs:
     runs-on: ubuntu-latest
 
     # The official Haskell images ship GHC and cabal already installed and
-    # on PATH, which removes the entire toolchain-provisioning stage from
-    # the failure surface.
+    # on PATH, so there is no toolchain-provisioning stage to go wrong.
     #
-    # This replaces haskell-actions/setup@v2, which failed here on every
-    # attempt — with cabal 'latest' (3.16.1.0) and again with cabal pinned
-    # to 3.12.1.0, both times at its internal "Setting up cabal" stage,
-    # before a single line of this package was compiled. Two guesses at its
-    # inputs fixed nothing, so the action is gone rather than tuned.
+    # Chosen over haskell-actions/setup@v2 for that simplicity, __not__
+    # because the action was at fault. It failed three times here with an
+    # opaque "cabal failed with exit code 1", and the real cause was a
+    # UTF-8 BOM accidentally prepended to typedgp.cabal — cabal cannot
+    # parse a .cabal file that starts with one, so every stage that touched
+    # the package manifest died the same way. Two attempts to fix this by
+    # tuning the action's GHC and cabal versions were treating a symptom.
+    #
+    # What the container actually bought was a __readable error message__:
+    # the same failure, surfaced as a cabal parse error naming the file,
+    # line and byte-order mark instead of a bare exit code.
     container: haskell:${{ matrix.ghc }}
 
     strategy:
