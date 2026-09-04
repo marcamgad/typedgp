@@ -1,0 +1,124 @@
+﻿cabal-version:      2.4
+name:               typedgp
+version:            0.1.0.0
+synopsis:           Symbolic regression by genetic programming, in pure Haskell
+description:
+  A genetic programming engine for symbolic regression, written from
+  scratch with no third-party dependencies. The expression AST, the PRNG,
+  the genetic operators, selection, fitness and the evolution loop are all
+  hand-written.
+  .
+  Every stochastic function threads an explicit PRNG state, so a whole run
+  is reproducible from a single 64-bit seed.
+
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Marc Youssef
+maintainer:         marcamgad@gmail.com
+category:           Math
+build-type:         Simple
+extra-doc-files:    README.md
+                    LICENSE
+
+-- Warnings are errors everywhere, including the test suite. The
+-- incomplete-pattern warning in particular is the refactoring safety net
+-- that makes adding an operator to TypedGP.Expr a mechanical change:
+-- disabling it would silently allow a half-finished constructor.
+common warnings
+  ghc-options: -Wall -Werror
+
+-- -threaded and -N are required for the parallel fitness evaluation in
+-- TypedGP.Population to use more than one core; without them the sparks
+-- are created and immediately fizzle.
+common parallel
+  ghc-options: -threaded -rtsopts "-with-rtsopts=-N"
+
+library
+  import:           warnings
+  hs-source-dirs:   src
+  exposed-modules:
+    TypedGP.Benchmark
+    TypedGP.Checkpoint
+    TypedGP.Config
+    TypedGP.Data.Dataset
+    TypedGP.Differentiate
+    TypedGP.DomainStats
+    TypedGP.Eval
+    TypedGP.Evolution
+    TypedGP.Expr
+    TypedGP.Fitness
+    TypedGP.Gen.Grow
+    TypedGP.LocalSearch
+    TypedGP.Ops.Crossover
+    TypedGP.Ops.Hoist
+    TypedGP.Ops.Mutation
+    TypedGP.Ops.Selection
+    TypedGP.Population
+    TypedGP.Pretty
+    TypedGP.Random
+    TypedGP.Report
+    TypedGP.Simplify
+    TypedGP.Spectral
+    TypedGP.Uncertainty
+
+  -- The zero-dependency constraint, enforced here: base and nothing else.
+  -- GHC.Conc (used for par/pseq) ships inside base, so the parallelism
+  -- costs no dependency either.
+  --
+  -- 4.17 is GHC 9.4. base 4.20 (GHC 9.10) moved foldl' into the Prelude,
+  -- so Fitness, Population and Evolution import it behind a
+  -- MIN_VERSION_base CPP guard: required below 4.20, a -Werror redundant
+  -- import at and above it. CPP is a language extension, not a package, so
+  -- the base-only constraint is intact.
+  build-depends:    base >=4.17 && <5
+  default-language: Haskell2010
+
+executable typedgp
+  import:           warnings, parallel
+  hs-source-dirs:   app
+  main-is:          Main.hs
+  -- 'typedgp' here is this package's own library, not a third-party
+  -- package; base remains the only external dependency.
+  build-depends:    base >=4.17 && <5
+                  , typedgp
+  default-language: Haskell2010
+
+-- The benchmark suite is a separate executable rather than part of the main
+-- CLI: it is a measurement tool for changes to the engine, not something an
+-- end user fitting their own data ever runs.
+executable typedgp-bench
+  import:           warnings, parallel
+  hs-source-dirs:   bench
+  main-is:          Main.hs
+  build-depends:    base >=4.17 && <5
+                  , typedgp
+  default-language: Haskell2010
+
+test-suite typedgp-test
+  import:           warnings, parallel
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Spec.hs
+  other-modules:
+    BenchmarkSpec
+    BinderSpec
+    CheckpointSpec
+    AgeFitnessSpec
+    DifferentiateSpec
+    DomainSpec
+    ParetoSpec
+    EvolutionSpec
+    ExprSpec
+    FitnessSpec
+    LexicaseSpec
+    LocalSearchSpec
+    OpsSpec
+    RandomSpec
+    ReportSpec
+    SimplifySpec
+    SpectralSpec
+    UncertaintySpec
+
+  build-depends:    base >=4.17 && <5
+                  , typedgp
+  default-language: Haskell2010

@@ -1,0 +1,26 @@
+# Cabal / GHC build output
+dist-newstyle/
+dist-98/
+*.o
+*.hi
+*.hie
+*.dyn_o
+*.dyn_hi
+*.chi
+*.chs.h
+
+# Executables produced by an in-place build
+*.exe
+
+# Local cabal state
+cabal.project.local
+cabal.project.local~
+.ghc.environment.*
+
+# Checkpoints written by `typedgp --checkpoint-every`
+*.checkpoint
+
+# Editor / OS noise
+.stack-work/
+*.swp
+.DS_Store
