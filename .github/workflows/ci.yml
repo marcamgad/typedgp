@@ -6,51 +6,48 @@ on:
   pull_request:
   workflow_dispatch:
 
-# One in-flight run per branch; a new push cancels the previous one.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build:
     name: GHC ${{ matrix.ghc }}
     runs-on: ubuntu-latest
+
+    # The official Haskell images ship GHC and cabal already installed and
+    # on PATH, which removes the entire toolchain-provisioning stage from
+    # the failure surface.
+    #
+    # This replaces haskell-actions/setup@v2, which failed here on every
+    # attempt — with cabal 'latest' (3.16.1.0) and again with cabal pinned
+    # to 3.12.1.0, both times at its internal "Setting up cabal" stage,
+    # before a single line of this package was compiled. Two guesses at its
+    # inputs fixed nothing, so the action is gone rather than tuned.
+    container: haskell:${{ matrix.ghc }}
+
     strategy:
       fail-fast: false
       matrix:
-        # Two-component versions, which the setup action resolves itself —
-        # observed resolving to 9.6.7 and 9.10.3. The 9.10 line is the
-        # compiler this was developed on.
-        #
-        # The pair exercises both sides of the MIN_VERSION_base(4,20,0) CPP
-        # shim in Fitness, Population and Evolution: the 9.6 line ships
-        # base 4.18 and needs the explicit foldl' import, the 9.10 line
-        # ships base 4.20 and rejects that import as redundant under
-        # -Werror. Only one branch can compile on any single compiler, so
-        # testing one version would leave the other unverified.
-        ghc: ['9.6', '9.10']
+        # Exercises both sides of the MIN_VERSION_base(4,20,0) CPP shim in
+        # Fitness, Population and Evolution: 9.6.7 ships base 4.18 and needs
+        # the explicit foldl' import, 9.10.1 ships base 4.20 and rejects
+        # that import as redundant under -Werror. Only one branch can
+        # compile on any single compiler, so a single-version matrix would
+        # leave the other permanently unverified.
+        ghc: ['9.6.7', '9.10.1']
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: ${{ matrix.ghc }}
-          # Pinned, not 'latest'. 'latest' resolved to cabal 3.16.1.0,
-          # whose "Setting up cabal" step failed on both compilers before
-          # a single line was compiled. A moving version is also the wrong
-          # default for a project whose central claim is reproducibility:
-          # 'latest' means the build can break without anything in the
-          # repository changing.
-          cabal-version: '3.12.1.0'
+      - name: Versions
+        run: |
+          ghc --version
+          cabal --version
 
       - name: Update package index
         run: cabal update
 
-      # No dependency cache, and no freeze file, on purpose: this package
+      # No dependency cache and no freeze file, deliberately: this package
       # depends on `base` alone, so there is nothing to resolve, download or
-      # cache. Both steps existed in the first version of this workflow and
-      # were pure ceremony — added failure surface buying nothing.
+      # cache. Both existed in the first version of this workflow and were
+      # pure ceremony.
       - name: Build
         run: cabal build all --enable-tests
 
