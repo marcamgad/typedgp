@@ -18,35 +18,39 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both sides of the MIN_VERSION_base(4,20,0) CPP shim in
-        # Fitness/Population/Evolution: 9.6 needs the explicit foldl'
-        # import, 9.10 gets it from the Prelude and rejects the import as
-        # redundant under -Werror. Only one branch can be exercised on any
-        # single compiler, so testing one version would leave the other
-        # permanently unverified.
+        # Two-component versions, which the setup action resolves itself —
+        # observed resolving to 9.6.7 and 9.10.3. The 9.10 line is the
+        # compiler this was developed on.
+        #
+        # The pair exercises both sides of the MIN_VERSION_base(4,20,0) CPP
+        # shim in Fitness, Population and Evolution: the 9.6 line ships
+        # base 4.18 and needs the explicit foldl' import, the 9.10 line
+        # ships base 4.20 and rejects that import as redundant under
+        # -Werror. Only one branch can compile on any single compiler, so
+        # testing one version would leave the other unverified.
         ghc: ['9.6', '9.10']
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: haskell-actions/setup@v2
-        id: setup
         with:
           ghc-version: ${{ matrix.ghc }}
-          cabal-version: 'latest'
+          # Pinned, not 'latest'. 'latest' resolved to cabal 3.16.1.0,
+          # whose "Setting up cabal" step failed on both compilers before
+          # a single line was compiled. A moving version is also the wrong
+          # default for a project whose central claim is reproducibility:
+          # 'latest' means the build can break without anything in the
+          # repository changing.
+          cabal-version: '3.12.1.0'
 
-      - name: Configure
-        run: cabal configure --enable-tests --enable-benchmarks
+      - name: Update package index
+        run: cabal update
 
-      - name: Freeze
-        run: cabal freeze
-
-      - uses: actions/cache@v4
-        with:
-          path: ${{ steps.setup.outputs.cabal-store }}
-          key: ${{ runner.os }}-ghc-${{ matrix.ghc }}-${{ hashFiles('cabal.project.freeze') }}
-          restore-keys: ${{ runner.os }}-ghc-${{ matrix.ghc }}-
-
+      # No dependency cache, and no freeze file, on purpose: this package
+      # depends on `base` alone, so there is nothing to resolve, download or
+      # cache. Both steps existed in the first version of this workflow and
+      # were pure ceremony — added failure surface buying nothing.
       - name: Build
         run: cabal build all --enable-tests
 
