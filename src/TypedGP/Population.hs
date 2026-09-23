@@ -348,7 +348,7 @@ injectFresh cfg table ds s0
 -- rather than to the selector.
 chooseElites
   :: Config
-  -> SelectionContext
+  -> SelectionContext Individual
   -> [Scored Individual]
   -> [Individual]
   -- ^ Individuals in scalar-ranked order, best first.
@@ -436,7 +436,7 @@ simplifyIndividual cfg ds ind
 -- Crossover yields two children at a time, so the last batch may be
 -- trimmed. Termination relies on 'makeOffspring' always returning at least
 -- one expression.
-breed :: Config -> FrequencyTable -> SelectionContext -> [Scored Individual] -> Int -> Seed -> ([(Expr, Int)], Seed)
+breed :: Config -> FrequencyTable -> SelectionContext Individual -> [Scored Individual] -> Int -> Seed -> ([(Expr, Int)], Seed)
 breed cfg table context pool wanted s0 = go wanted s0 []
   where
     go :: Int -> Seed -> [(Expr, Int)] -> ([(Expr, Int)], Seed)
@@ -456,7 +456,7 @@ breed cfg table context pool wanted s0 = go wanted s0 []
 -- Always returns a non-empty list. When selection fails (only possible
 -- with an empty pool) it falls back to a freshly generated individual,
 -- which keeps 'breed' making progress instead of spinning.
-makeOffspring :: Config -> FrequencyTable -> SelectionContext -> [Scored Individual] -> Seed -> ([(Expr, Int)], Seed)
+makeOffspring :: Config -> FrequencyTable -> SelectionContext Individual -> [Scored Individual] -> Seed -> ([(Expr, Int)], Seed)
 makeOffspring cfg table context pool s0 =
   let (roll, s1) = nextDouble s0
       crossoverCut = cfgCrossoverRate cfg
@@ -518,6 +518,21 @@ makeOffspring cfg table context pool s0 =
 -- @pseq@ stops GHC from reordering the demand so that the main thread
 -- races ahead into work it just sparked.
 --
+-- == The spark must be the value the result holds
+--
+-- __Fixed 2026-09-23; this did not parallelise at all before.__ The
+-- earlier version sparked @forceSpine mapped@ — a fresh @()@-valued thunk —
+-- and returned @mapped@. Since GHC 7 sparks are /weak/: a spark whose
+-- target nothing else references is discarded at the next GC. Nothing
+-- referenced that @()@, so almost every spark was collected before a
+-- worker reached it, and the main thread then evaluated @mapped@ itself,
+-- serially. Measured with @+RTS -s@: 1296 sparks, 182 converted,
+-- __1114 GC'd__, and no speedup at all from 1 core to 8.
+--
+-- Now the sparked closure /is/ the list element the result conses, so it
+-- stays reachable, and whichever thread evaluates it first — a worker or
+-- the consumer — does the work exactly once.
+--
 -- Local bindings here are left unannotated on purpose: their types mention
 -- the enclosing @a@ and @b@, which a local signature would shadow with
 -- fresh variables.
@@ -526,9 +541,13 @@ parMapChunked chunkSize f xs = concat (go (chunksOf (max 1 chunkSize) xs))
   where
     go [] = []
     go (chunk : rest) =
-      let mapped = map f chunk
+      let mapped = forced (map f chunk)
           mappedRest = go rest
-      in forceSpine mapped `par` (mappedRest `pseq` (mapped : mappedRest))
+      in mapped `par` (mappedRest `pseq` (mapped : mappedRest))
+
+    -- A list that reaches weak head normal form only once every element
+    -- has. Sparking this, rather than a separate @()@, is the fix.
+    forced ys = forceSpine ys `pseq` ys
 
 -- | Force a list's spine and every element to weak head normal form.
 --

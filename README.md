@@ -3,18 +3,96 @@
 [![CI](https://github.com/marcamgad/typedgp/actions/workflows/ci.yml/badge.svg)](https://github.com/marcamgad/typedgp/actions/workflows/ci.yml)
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 
-**Zero-dependency, deterministic, statistically honest symbolic regression in
-Haskell.** `base` only; every run reproducible from one 64-bit seed; every
-performance claim carries a sample size and a significance test, including the
-ones that came out null.
+**Give it a table of numbers. It gives you back the formula that made them.**
 
-A genetic programming engine for symbolic regression, written from scratch in
-Haskell with **no third-party dependencies** â€” `base` only. The expression AST,
-the PRNG, mutation, crossover, selection, fitness and the evolution loop are all
-hand-written.
+No neural network, no gradient descent, no dependencies — a population of
+candidate equations that mutate, breed and compete until one of them *is* the
+law hiding in your data. Written from scratch in Haskell against `base` alone:
+the expression AST, the PRNG, crossover, mutation, selection, fitness and the
+evolution loop are all hand-written, and the whole thing is 22 modules you can
+read in an afternoon.
 
-Given a table of inputs and outputs, it searches for a formula that reproduces
-them. The shipped benchmark is `2x + sin(y)`.
+## Try it
+
+```bash
+cabal run typedgp
+```
+
+Thirty seconds later, watch it work out `2x + sin(y)` from nothing but numbers:
+
+```
+gen   0 | best   2.914132 | err   2.902132 | size  6 | x * 2 - 0.41
+gen   7 | best   0.318871 | err   0.306871 | size  6 | x + x - cos(y)
+gen  19 | best   0.012044 | err   0.000044 | size  6 | x + x + sin(y)
+```
+
+On your own data — header row naming the columns, target value last:
+
+```bash
+cabal run typedgp -- --data mydata.csv --vars x,y --gens 100
+```
+
+`cabal run typedgp -- --help` lists every flag.
+
+## What it can find
+
+Not just polynomials. The operator set reaches from arithmetic through
+transcendentals to the special functions. Measured on the built-in benchmark
+suite, default settings:
+
+| target | fits within 5% | finds the exact law |
+|---|---|---|
+| `2 sin(3x + 0.5)` | 100% of runs | 100% — frequency read off the data's own spectrum |
+| `exp(sin(x²))` | 70% | 50% — `exp(sin(x * x))`, and 70% with `--selection age-fitness` |
+| `4 x^1.7` | 100% | 0% — always a close fit, never the clean form yet |
+
+The last row is an open problem, not a solved one: the search always gets
+within 5% of the power law and has never produced `4 * x ^ 1.7` itself.
+
+It also ships `gamma`, `zeta` (Euler–Maclaurin with the functional-equation
+reflection), and `sum(i=lo..hi, body)` binders — all hand-implemented, all
+tested.
+
+And because the search is a *symbolic* one, the answer is an expression you can
+do algebra to. `TypedGP.Differentiate` will hand you `f'` as a formula, not a
+finite-difference sampler.
+
+## What makes it unusual
+
+- **Zero dependencies.** `build-depends: base` and nothing else, enforced
+  everywhere. Clone it and `cabal build` — no lockfile, no toolchain
+  archaeology, no version solving.
+- **Bit-for-bit deterministic.** Every stochastic function threads an explicit
+  seed. The same command gives the same answer forever, so two runs can be
+  diffed and a difference *means something*.
+- **786 hand-rolled assertions, no test framework.** The zero-dependency rule
+  applies to the tests too.
+- **`-Wall -Werror`, everywhere, never suppressed** — and CI builds on two GHC
+  versions to keep it honest.
+- **Every number here carries a sample size and a significance test**,
+  including the ones that came out null. Frequency seeding is +65pp with
+  z = 4.39; age-fitness Pareto is nothing at all at z = 0.32, and says so.
+
+## Where the interesting problems are
+
+Two of them, both under-discussed and both with the fix in the code:
+
+**Protected arithmetic is a lie the search learns to exploit.** Mapping
+`1/0 → 1` keeps evolution alive, and makes an individual scoring well
+*because* it divides by zero indistinguishable from one that does not.
+[`evalDomain`](src/TypedGP/Eval.hs) separates numerical protection from
+mathematical validity — and measuring it found **75% of the winning formulas on
+one benchmark were out of domain**.
+
+**A pass/fail metric can hide a real improvement completely.** Three separate
+mechanisms produced better solutions with no movement in the recovery rate at
+all. They turned out to be one effect that the metric structurally could not
+see — the write-up is
+[here](#recovery-rate-was-measuring-the-wrong-thing-and-here-is-what-it-was).
+
+The [`docs/`](docs/) directory has seven design notes, each written *before*
+the code it describes, each with a prediction recorded in advance and a dated
+verdict on whether it held.
 
 ```
 gen   0 | best   2.914132 | err   2.902132 | mean     8.4412 | size    6 (avg 11.3) | x * 2 - 0.41
@@ -25,7 +103,7 @@ gen  19 | best   0.012044 | err   0.000044 | mean     1.9930 | size    6 (avg 15
 ## Building
 
 Requires GHC and cabal. If you do not have them, install
-[GHCup](https://www.haskell.org/ghcup/) â€” on Windows:
+[GHCup](https://www.haskell.org/ghcup/) — on Windows:
 
 ```bash
 Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; try { Invoke-Command -ScriptBlock ([ScriptBlock]::Create((Invoke-WebRequest https://www.haskell.org/ghcup/sh/bootstrap-haskell.ps1 -UseBasicParsing))) } catch { Write-Error $_ }
@@ -89,7 +167,7 @@ src/TypedGP/
   Ops/Mutation.hs     subtree + point mutation, and the mutation dispatcher
   Ops/Hoist.hs        hoist mutation (the only shrinking operator)
   Ops/Crossover.hs    subtree crossover
-  Ops/Selection.hs    tournament, roulette, NSGA-II Pareto, Îµ-lexicase
+  Ops/Selection.hs    tournament, roulette, NSGA-II Pareto, ε-lexicase
   Fitness.hs          error metrics + parsimony penalty
   Data/Dataset.hs     DataPoint, sampling, splitting, k-folds, resampling
   Population.hs       population type, parallel scoring, generational step
@@ -98,7 +176,7 @@ src/TypedGP/
   Report.hs           structured result + hand-rolled JSON encoder
   Checkpoint.hs       population/seed serialisation for --resume
   Config.hs           every hyperparameter, in one record
-app/Main.hs           CLI only â€” no search logic
+app/Main.hs           CLI only — no search logic
 test/                 hand-rolled runner, no HUnit/QuickCheck
 ```
 
@@ -115,9 +193,9 @@ relies on a prior check to make a case impossible, there is a comment saying so.
 
 **Protected arithmetic.** `eval` is total and always returns a finite `Double`.
 Division by (near) zero yields `1.0`; `NaN` collapses to `0`; results are clamped
-to Â±1e12. This matters more than it looks: a single `NaN` in a fitness score
-poisons every comparison it takes part in â€” `NaN < x` and `NaN > x` are both
-`False` â€” silently corrupting selection for the rest of the run.
+to ±1e12. This matters more than it looks: a single `NaN` in a fitness score
+poisons every comparison it takes part in — `NaN < x` and `NaN > x` are both
+`False` — silently corrupting selection for the rest of the run.
 
 **One place for hyperparameters.** No tunable number appears outside
 `Config.hs`. Adding a knob means adding a field and a CLI flag, not hunting
@@ -131,11 +209,11 @@ Arithmetic (`+ - * /`), trigonometry (`sin cos`), and the special functions
 Everything is protected: `eval` is total and always returns a finite `Double`.
 Division by near-zero gives `1.0`; `log` and `sqrt` take magnitudes; `gamma`
 returns the same `1.0` sentinel at its poles (the non-positive integers) and
-`zeta` at its single pole (`s = 1`); results clamp to Â±1e12.
+`zeta` at its single pole (`s = 1`); results clamp to ±1e12.
 
 `gamma` uses the Lanczos approximation (`g = 7`, 9 coefficients) with Euler
-reflection below `z = 0.5`. `zeta` uses Eulerâ€“Maclaurin summation, which is not
-just a fast series but the *analytic continuation* â€” so `zeta(0) = -1/2` and
+reflection below `z = 0.5`. `zeta` uses Euler–Maclaurin summation, which is not
+just a fast series but the *analytic continuation* — so `zeta(0) = -1/2` and
 `zeta(-1) = -1/12` fall straight out of the same formula, with no special
 casing, and the trivial zeros at negative even integers come out of the
 reflection branch's `sin` factor. All of these are checked against closed forms
@@ -146,7 +224,7 @@ in `ExprSpec`.
 Three steps, two of which the compiler drives:
 
 1. Add the constructor to `Expr`.
-2. Add it to `binaryOps` or `unaryOps` in the same file, **with a weight** â€” the
+2. Add it to `binaryOps` or `unaryOps` in the same file, **with a weight** — the
    one manual step, which is why those lists live next to the type.
 3. Compile. `-Wall -Werror` reports every pattern match that needs updating
    (`eval`, `evalChecked`, `childrenOf`, `mapChildren`, `opName`, `replaceAt`,
@@ -172,13 +250,13 @@ Two warnings from having done this once:
 
 `Expr.hs` carries a design note on the intended GADT upgrade path (a typed
 `Expr a` with `Bool` and `Double` variants, unlocking `If` and comparisons),
-including the part that is actually hard â€” making crossover type-aware so a
+including the part that is actually hard — making crossover type-aware so a
 `Expr Bool` subtree is only ever swapped with another `Expr Bool`.
 
 ### Structure search and constant search are different problems
 
 Genetic programming is a search over *structures*. It is good at that and bad
-at the continuous problem hiding inside each one â€” constants otherwise move only
+at the continuous problem hiding inside each one — constants otherwise move only
 by random jitter in point mutation, which is a poor way to solve a smooth
 k-dimensional minimisation.
 
@@ -192,8 +270,8 @@ derivative does not exist exactly where evolved individuals congregate.
 The method matters, not just the idea. An earlier compass (coordinate) search
 is kept in the same module for comparison, and there is a test asserting it
 **fails** where the simplex succeeds. On `c1 * x^c2` the two constants are
-coupled â€” raising the exponent rescales the output, so a step in either alone
-looks worse unless the other moves with it â€” and a coordinate method stalls in
+coupled — raising the exponent rescales the output, so a step in either alone
+looks worse unless the other moves with it — and a coordinate method stalls in
 the curved valley. The simplex moves the whole vector at once and reaches
 (4, 1.7). Same story on Rosenbrock, which is the textbook version of that
 geometry.
@@ -201,7 +279,7 @@ geometry.
 **What this does not fix, and why.** `2 sin(3x + 0.5)` is still mostly missed,
 because frequency estimation is *multimodal* rather than merely coupled: the
 error has a local minimum near every frequency, so a simplex started at 1 stops
-at the first barrier. Two tests isolate this â€” from a distant start the
+at the first barrier. Two tests isolate this — from a distant start the
 frequency is not recovered; from a start of 2.7 the *same* optimiser recovers
 all three constants exactly. What is missing is **initialisation** (a
 periodicity search that seeds trigonometric subtrees), not a better optimiser.
@@ -210,7 +288,7 @@ periodicity search that seeds trigonometric subtrees), not a better optimiser.
 
 In the order the work was staged:
 
-1. Correctness first, unoptimised â€” plain lists and naive recursion.
+1. Correctness first, unoptimised — plain lists and naive recursion.
 2. Strict accumulators (`BangPatterns`) in the fitness folds and the generation
    loop, where lazy accumulation over hundreds of generations is the classic
    space leak.
@@ -219,7 +297,7 @@ In the order the work was staged:
    real bottleneck; `Population.parMapChunked` sparks chunks of
    `cfgParallelChunk` individuals. `Individual`'s strict fields are what make
    forcing each element to WHNF sufficient to do the arithmetic on the spark.
-4. Unboxed arrays for population storage â€” **not done**, deliberately. Profile
+4. Unboxed arrays for population storage — **not done**, deliberately. Profile
    before doing it.
 
 ## Testing
@@ -229,25 +307,25 @@ pass/fail, non-zero exit on any failure. Assertions are forced inside `try`, so
 an unexpected exception is reported as one failed assertion instead of killing
 the run.
 
-- **ExprSpec** â€” hand-computed evaluation results, protected division on a
+- **ExprSpec** — hand-computed evaluation results, protected division on a
   literal zero, `replaceAt` index arithmetic at every position, exact
   pretty-printer output including parenthesisation.
-- **RandomSpec** â€” mean and variance of 200k uniforms against the expected
+- **RandomSpec** — mean and variance of 200k uniforms against the expected
   uniform distribution, bucket occupancy for `nextInt`, no repeats over a 5000-
   sample window (a short cycle would show up here), shuffle-is-a-permutation.
   Imports nothing from the GP side, so a failure here is unambiguously the PRNG.
-- **OpsSpec** â€” invariants over 200 seeds: crossover conserves total node count
+- **OpsSpec** — invariants over 200 seeds: crossover conserves total node count
   when unconstrained, every operator respects the depth cap (including on
   maximum-depth parents), point mutation preserves size and depth exactly,
   selection returns a real pool member and beats a random draw.
-- **EvolutionSpec** â€” determinism, generation numbering, early stopping,
+- **EvolutionSpec** — determinism, generation numbering, early stopping,
   monotone best-fitness under elitism, config validation, and the end-to-end
   convergence test against `2x + sin(y)`.
 
 The convergence assertion is statistical by nature: it requires a *majority* of
 seeds to reach the threshold, not all of them. GP does not converge on every
 seed, and a test demanding it would be flaky by construction. The structural
-assertions around it are exact â€” if they pass and convergence fails, the problem
+assertions around it are exact — if they pass and convergence fails, the problem
 is tuning, not wiring.
 
 ## Before you trust a result
@@ -263,7 +341,7 @@ curve becomes a believed mechanism.
 1. **Check the holdout error, not the training error.**
    Run with `--holdout 0.3`. The output prints both, plus a plain-language
    verdict on the gap. Training error alone cannot distinguish a discovered
-   relationship from a memorised sample â€” a formula with enough nodes can fit
+   relationship from a memorised sample — a formula with enough nodes can fit
    any finite dataset exactly. If holdout error is much worse than training
    error, you have found noise.
 
@@ -276,25 +354,25 @@ curve becomes a believed mechanism.
 3. **Do not ignore the input-to-example warning.**
    Below roughly 10 examples per input variable the search can usually fit the
    sample exactly while learning nothing generalisable, and the run says so.
-   You may have a good reason to proceed â€” the warning does not stop the run â€”
+   You may have a good reason to proceed — the warning does not stop the run —
    but it should change how you describe the result.
 
 4. **Check the coefficient intervals, not just the coefficients.**
-   Run with `--bootstrap 500`. `0.2984` and `0.30 Â± 0.25` are different claims,
+   Run with `--bootstrap 500`. `0.2984` and `0.30 ± 0.25` are different claims,
    and only one of them is worth acting on. Intervals that are wide relative to
    the coefficient mean the data does not pin that number down, whatever the
    error metric says.
 
 5. **If outliers are plausible, do not use the default metric.**
    Squared error under 5% contamination costs a factor of ten in recovery on
-   this project's own benchmark â€” 5% against ~52% for `--metric mae` or
+   this project's own benchmark — 5% against ~52% for `--metric mae` or
    `--metric huber`. Contaminated data does not announce itself, so the
    question to ask is whether your collection process *could* produce a bad
    reading, not whether you have spotted one.
 
 6. **Sanity-check the formula against domain knowledge.**
    Does it have the right sign? The right units, if your inputs have units?
-   Does it behave sensibly outside the range of the training data â€” and do you
+   Does it behave sensibly outside the range of the training data — and do you
    need it to? This step cannot be automated and is the one most often skipped.
 
 7. **Prefer the simplest formula on the Pareto front that is accurate enough.**
@@ -306,7 +384,7 @@ curve becomes a believed mechanism.
 A formula that survives all seven is worth investigating further. One that has
 only been fitted is not a finding.
 
-## âš  Benchmark numbers below predate the `Pow` semantics change (2026-08-19)
+## ⚠ Benchmark numbers below predate the `Pow` semantics change (2026-08-19)
 
 `Pow` was redefined as `|base| ^ expo` (see `docs/phase5-pow-semantics.md`).
 The design note predicted this would leave every recorded number unchanged,
@@ -315,8 +393,8 @@ have measure zero under continuous sampling.
 
 **That prediction was wrong.** Computed exponents hit exact integers
 structurally: `protectedDiv x x` returns exactly `1.0`, so `a ^ (x / x)` is an
-odd integer power at *every* input. Measured exposure is small â€” 1% of
-generation-zero evaluations on `mixed`, under 1% on the rest â€” but the search
+odd integer power at *every* input. Measured exposure is small — 1% of
+generation-zero evaluations on `mixed`, under 1% on the rest — but the search
 is chaotic, and one changed fitness in generation zero changes which parents
 are selected, after which the run is unrelated to its predecessor.
 
@@ -331,21 +409,21 @@ Re-measured after the change:
 | `logarithmic` | 60%, 0.0333 | 60%, 0.0370 |
 
 Pooled recovery moved 49/100 to 50/100: **z = 0.14, p = 0.89.** No individual
-problem moved significantly either â€” `nested`'s 55% â†’ 70% is z = 0.98,
+problem moved significantly either — `nested`'s 55% → 70% is z = 0.98,
 p = 0.33, and the starred cells are too sparse for a z-test to mean anything.
 This is **resampling noise, not evidence for or against the change.**
 
 Every table below was measured on the pre-change engine. They are left as
 recorded rather than silently patched, because patching them with numbers that
 were never measured would be worse than labelling them. The *comparisons*
-within each table remain valid â€” both arms of every A/B were run on the same
-engine â€” so the conclusions stand; only the absolute values are stale.
+within each table remain valid — both arms of every A/B were run on the same
+engine — so the conclusions stand; only the absolute values are stale.
 
 ## Benchmark suite
 
-`2x + sin(y)` is recovered 10/10 by generation 0â€“4, which measures the
+`2x + sin(y)` is recovered 10/10 by generation 0–4, which measures the
 initialiser more than the search. `typedgp-bench` runs nine mathematical
-families instead, so a change to the engine can be shown to help â€” or shown
+families instead, so a change to the engine can be shown to help — or shown
 not to.
 
 ```bash
@@ -356,10 +434,10 @@ cabal run typedgp-bench -- --quick
 cabal run typedgp-bench -- --seeds 5 --format json > before.json
 ```
 
-Nine families â€” polynomial, rational, power law, exponential, logarithmic,
-trigonometric, mixed, nested, interaction â€” crossed with five variants: `clean`,
+Nine families — polynomial, rational, power law, exponential, logarithmic,
+trigonometric, mixed, nested, interaction — crossed with five variants: `clean`,
 `noisy`, `irrelevant` (adds distractor columns), `hetero` (noise that widens
-with the signal), `outliers` (5% contamination at 6Ïƒ).
+with the signal), `outliers` (5% contamination at 6σ).
 
 Reported per problem: recovery rate, in-domain and extrapolation error,
 complexity, time, and false discovery rate. Everything is seeded explicitly, so
@@ -369,13 +447,13 @@ Two measurement choices worth knowing:
 
 - **Recovery is functional, not syntactic.** A formula counts as recovered when
   its normalised RMSE against a fresh sample of the *noiseless* truth falls
-  under 0.05. Comparing expression trees would mostly report noise â€” `x + x`,
+  under 0.05. Comparing expression trees would mostly report noise — `x + x`,
   `2 * x` and `x * 2` are the same function and the engine has no reason to
   prefer a spelling.
 - **Normalised, and reported as medians.** Errors are divided by the target's
   own spread, so one threshold means the same thing on `2 exp(0.7x)` (range ~30)
   and `2 sin(3x + 0.5)` (range 4); 1.0 is what predicting the mean scores.
-  Medians rather than means because results are heavy-tailed â€” one failed seed
+  Medians rather than means because results are heavy-tailed — one failed seed
   can score a thousand times worse than the rest.
 
 ### What it currently says
@@ -396,17 +474,17 @@ variant):
 | rational | 5% | 0.1819 | 4.5861 | 12 |
 
 **Use 20 seeds, not 3.** The same table at 3 seeds reported `interaction` and
-`exponential` at 100%, `logarithmic` at 33% and `trigonometric` at 0% â€” errors
+`exponential` at 100%, `logarithmic` at 33% and `trigonometric` at 0% — errors
 of 20 to 30 percentage points against the numbers above. Symbolic regression
 outcomes are Bernoulli trials with high variance; a handful of seeds cannot
 separate a real improvement from a lucky draw. Budget the compute.
 
 The picture this gives is far more useful than "10/10 on the demo problem":
 
-- **`rational` is the standing failure â€” 1 of 20.** Runs settle on a sigmoid
+- **`rational` is the standing failure — 1 of 20.** Runs settle on a sigmoid
   like `tanh(0.59x) + 0.24`: a genuinely good fit to `(2x+1)/(x+3)` that is the
   wrong function, at a tidy 6 nodes. This is the sharpest false-discovery case
-  in the suite â€” low error, low complexity, wrong answer.
+  in the suite — low error, low complexity, wrong answer.
 - **`trigonometric` and `mixed` are next, at 35% and 15%.** `2 sin(3x + 0.5)`
   needs the frequency 3 *inside* the sine. Constant optimisation (below) helped
   here but cannot finish the job, because frequency estimation is multimodal:
@@ -414,11 +492,11 @@ The picture this gives is far more useful than "10/10 on the demo problem":
   optimiser.
 - **Extrapolation is where fits die.** `logarithmic` scores 0.03 in domain and
   4.7 outside it. In-domain error alone would call that a success.
-- **The difficulty gradient is real.** On `interaction` (3 seeds): clean 100% â†’
-  noisy 100% â†’ irrelevant 67% â†’ hetero 33% â†’ outliers 0%. Outliers break every
-  problem in the suite â€” but only under squared error. See below.
+- **The difficulty gradient is real.** On `interaction` (3 seeds): clean 100% →
+  noisy 100% → irrelevant 67% → hetero 33% → outliers 0%. Outliers break every
+  problem in the suite — but only under squared error. See below.
 
-`BenchmarkSpec` tests the instrument rather than the search â€” that
+`BenchmarkSpec` tests the instrument rather than the search — that
 heteroscedastic noise really does widen with the signal, that outliers really
 are rare and large, that predicting the mean really does score 1.0. It asserts
 no recovery rates: those move with tuning, and pinning them would make the suite
@@ -427,7 +505,7 @@ fail for reasons unrelated to correctness.
 ## Known limits of the demo problem
 
 `2x + sin(y)` is recovered 10/10 at the default settings, usually by generation
-0â€“4. That is a weak result to lean on: with a population of 600 and a six-node
+0–4. That is a weak result to lean on: with a population of 600 and a six-node
 target, ramped half-and-half often produces the answer by chance, so the default
 run exercises the initialiser more than the search.
 
@@ -436,7 +514,7 @@ Two consequences, both measured rather than assumed:
 - **Shrink the population and the search's real weakness shows.** At `--pop 50`
   the default tournament size of 5 samples 10% of the population per selection.
   Diversity collapses within a few generations and 7/10 runs freeze on `x + x`
-  â€” the linear term found exactly, the `sin` term never found at all â€” for the
+  — the linear term found exactly, the `sin` term never found at all — for the
   full 60-generation budget. Dropping to `--tournament 2` recovers 6/10 and
   moves nine of ten runs out of that degenerate optimum.
 - **Hoist mutation is unvalidated at the population level.** It is correct in
@@ -448,14 +526,14 @@ Two consequences, both measured rather than assumed:
   is already active, so there is no bloat to remove.
 
 Both point the same way, and `typedgp-bench` above supplies the harder targets
-and larger solutions these findings said were missing â€” formulas on
-`polynomial` and `mixed` run to 26â€“46 nodes, so there is finally real bloat for
+and larger solutions these findings said were missing — formulas on
+`polynomial` and `mixed` run to 26–46 nodes, so there is finally real bloat for
 a shrinking operator to remove.
 
 ### Robust loss on the `outliers` variant
 
-The `outliers` variant (5% of points displaced by 6Ïƒ) was previously written off
-as a known failure. It is not a failure of the engine â€” it is a failure of the
+The `outliers` variant (5% of points displaced by 6σ) was previously written off
+as a known failure. It is not a failure of the engine — it is a failure of the
 *default metric*. 20 seeds, nine problems, recovery rate:
 
 | | RMSE | MAE | Huber |
@@ -472,16 +550,16 @@ as a known failure. It is not a failure of the engine â€” it is a failure o
 | **pooled** | **5.0%** | **53.3%** | **51.7%** |
 | total nodes | 246 | 136 | **104** |
 
-**Squared error is the whole problem.** RMSE â†’ MAE or Huber takes pooled
-recovery from 5% to ~52%, a ten-fold improvement at z â‰ˆ 9.8. Under 5%
-contamination at 6Ïƒ, a squared penalty makes the outliers worth more than the
-signal, and the search obediently fits them â€” at 246 total nodes, twice the
+**Squared error is the whole problem.** RMSE → MAE or Huber takes pooled
+recovery from 5% to ~52%, a ten-fold improvement at z ≈ 9.8. Under 5%
+contamination at 6σ, a squared penalty makes the outliers worth more than the
+signal, and the search obediently fits them — at 246 total nodes, twice the
 complexity of either robust metric, because it is contorting itself to reach
 points that are noise.
 
 **But MAE and Huber are statistically tied on recovery** (96 vs 93 successes of
-180, z â‰ˆ 0.32). MAE wins on four problems, Huber on three, two tie. So the
-honest accounting is that **MAE â€” which was already in the codebase â€” would have
+180, z ≈ 0.32). MAE wins on four problems, Huber on three, two tie. So the
+honest accounting is that **MAE — which was already in the codebase — would have
 fixed this all along.** The gap was never a missing metric; it was that RMSE is
 the default and nobody had run the variant with `--metric mae`. Adding Huber did
 not rescue the outliers case. Measuring did.
@@ -493,7 +571,7 @@ Quadratic treatment of small residuals gives it a sharper gradient near a good
 fit than MAE's constant slope, and it shows.
 
 One caveat against the default: on `rational`, Huber collapses to a **2-node
-constant** and scores 0%. A threshold of 0.1Ïƒ is aggressive, and on a problem
+constant** and scores 0%. A threshold of 0.1σ is aggressive, and on a problem
 the search cannot fit anyway it appears to prefer conceding to everything over
 fitting anything. If you use Huber on a problem that resists fitting, raise
 `--huber-delta` before concluding the data is hopeless.
@@ -503,7 +581,7 @@ fitting anything. If you use Huber on a problem that resists fitting, raise
 that direction is small; the cost of being wrong the other way is a factor of
 ten in recovery.
 
-### Does Îµ-lexicase selection help?
+### Does ε-lexicase selection help?
 
 `--selection lexicase` filters candidates case by case in random order,
 keeping those within a median-absolute-deviation of the best on each, instead
@@ -511,7 +589,7 @@ of ordering on a single aggregate. The point is that a mean cannot distinguish
 an individual that is *uniquely excellent on a few cases* from one that is
 uniformly mediocre.
 
-Measured at 20 seeds, both arms at **population 200 over 40 generations** â€”
+Measured at 20 seeds, both arms at **population 200 over 40 generations** —
 lower than the headline table above, because lexicase is too slow to run the
 usual settings (see cost, below). The budget is identical on both sides, so the
 comparison is fair; the absolute rates are not comparable to the other tables.
@@ -519,10 +597,10 @@ comparison is fair; the absolute rates are not comparable to the other tables.
 | | tournament | lexicase | change | z | p |
 |---|---|---|---|---|---|
 | interaction | 35% | **95%** | +60 | **3.98** | **<0.0001** |
-| nested | 40% | 15% | âˆ’25 | 1.77 | 0.077 |
+| nested | 40% | 15% | −25 | 1.77 | 0.077 |
 | trigonometric | 15% | 30% | +15 | 1.14 | 0.26 |
-| power-law | 90% | 80% | âˆ’10 | 0.83 | 0.41 |
-| exponential | 60% | 50% | âˆ’10 | 0.63 | 0.53 |
+| power-law | 90% | 80% | −10 | 0.83 | 0.41 |
+| exponential | 60% | 50% | −10 | 0.63 | 0.53 |
 | logarithmic | 30% | 35% | +5 | 0.34 | 0.73 |
 | mixed | 10% | 15% | +5 | 0.46 | 0.65 |
 | rational | 0% | 5% | +5 | 1.01 | 0.31 |
@@ -530,23 +608,23 @@ comparison is fair; the absolute rates are not comparable to the other tables.
 | **pooled** | **37.8%** | **42.8%** | +5.0 | **0.97** | **0.33** |
 
 **Nine families were compared, so the multiple-comparisons correction matters
-and is applied.** At an uncorrected Î± = 0.05 you would expect roughly one
+and is applied.** At an uncorrected α = 0.05 you would expect roughly one
 spurious "significant" result from nine tests by chance alone. The Bonferroni
-threshold is Î±/9 â‰ˆ 0.0055. Reading the table against that:
+threshold is α/9 ≈ 0.0055. Reading the table against that:
 
-**One confirmed effect.** `interaction` at z â‰ˆ 3.98, p < 0.0001, survives
+**One confirmed effect.** `interaction` at z ≈ 3.98, p < 0.0001, survives
 Bonferroni by more than an order of magnitude. The target is `x1*x2 + sin(x3)`:
 a sum of terms that *different data points stress differently*, so an
-individual that has captured one term is a genuine partial solution â€” exactly
+individual that has captured one term is a genuine partial solution — exactly
 what an aggregate mean averages away and lexicase preserves. This is the
 largest single-problem effect measured anywhere in this project.
 
 **One effect that turned out not to be about lexicase at all.** `nested` at
-p â‰ˆ 0.077 does not survive correction, and an ablation (below) shows the
+p ≈ 0.077 does not survive correction, and an ablation (below) shows the
 mechanism I first proposed for it was wrong. It is an elitism interaction, not
 a property of lexicase.
 
-**One non-effect.** `trigonometric`'s +15 points is z â‰ˆ 1.14, p â‰ˆ 0.26. On 20
+**One non-effect.** `trigonometric`'s +15 points is z ≈ 1.14, p ≈ 0.26. On 20
 seeds a 15-point swing is ordinary noise, and it belongs in this table with its
 number attached rather than as a bare delta that reads like a third finding.
 
@@ -566,35 +644,35 @@ both problems were rerun with elitism disabled, 20 seeds, same budget:
 |---|---|---|
 | `nested`, tournament | 40% | **10%** |
 | `nested`, lexicase | 15% | **10%** |
-| **gap** | **âˆ’25** | **0** |
+| **gap** | **−25** | **0** |
 | `interaction`, tournament | 35% | 30% |
 | `interaction`, lexicase | 95% | 90% |
 | **gap** | **+60** | **+60** |
 
 **The `nested` regression is not a lexicase effect.** With elitism off the two
-strategies are indistinguishable â€” 10% each, gap exactly zero. What actually
+strategies are indistinguishable — 10% each, gap exactly zero. What actually
 happens is that scalar-ranked elitism helps *tournament* enormously on that
-problem (40% â†’ 10% when removed, z â‰ˆ 2.2, p â‰ˆ 0.03) and barely helps lexicase
-at all (15% â†’ 10%). Tournament and elitism both rank by the same scalar, so
+problem (40% → 10% when removed, z ≈ 2.2, p ≈ 0.03) and barely helps lexicase
+at all (15% → 10%). Tournament and elitism both rank by the same scalar, so
 they compound; lexicase optimises something else, so it gains nothing from
-them. Remove the prop and neither strategy can do `exp(sin(xÂ²))`.
+them. Remove the prop and neither strategy can do `exp(sin(x²))`.
 
 That is a materially different claim from the one this section originally
 made. "Lexicase hurts monolithic problems" was wrong; "on this problem
 scalar elitism is doing nearly all the work, and it only compounds with a
 scalar selector" is what the data supports. The mechanistic story that made
 the p = 0.08 feel credible was a plausible-sounding prior that the ablation
-did not confirm â€” which is the entire reason for running it.
+did not confirm — which is the entire reason for running it.
 
 **The `interaction` effect is robust to elitism**, holding at +60 points with
-elitism off (z â‰ˆ 3.87, p â‰ˆ 0.0001). It is a property of the selection
+elitism off (z ≈ 3.87, p ≈ 0.0001). It is a property of the selection
 strategy, not an artefact of what elitism preserves alongside it.
 
 #### Does lexicase-consistent elitism help? No.
 
 The ablation raises an obvious follow-on. If scalar elitism only compounds with
 a scalar selector, then under lexicase the elites are chosen by the very
-criterion lexicase exists to avoid â€” so choosing them *with the lexicase filter
+criterion lexicase exists to avoid — so choosing them *with the lexicase filter
 instead* ought to be free improvement, and might be suppressing some of
 `interaction`'s upside rather than merely failing to help on `nested`.
 
@@ -608,27 +686,27 @@ with its own random case order, without replacement) and measured at 20 seeds:
 | nested | 15% | 20% | 0.42 |
 | **pooled** | **46.7%** | **45.0%** | **0.18** |
 
-**Nothing.** Pooled z â‰ˆ 0.18 (p â‰ˆ 0.85), every problem within a single seed of
+**Nothing.** Pooled z ≈ 0.18 (p ≈ 0.85), every problem within a single seed of
 its counterpart. The hypothesis is not supported.
 
 In hindsight it is consistent with the ablation above rather than contradicted
 by it: `interaction` scored +60 with elitism at 2 *and* at 0, so elitism is
 essentially irrelevant to that problem. Given that, changing *how* elites are
-chosen was never likely to matter there â€” the earlier result already implied
+chosen was never likely to matter there — the earlier result already implied
 this one, and running it was how that became visible rather than assumed.
 
 One thing that did move, reported because it is the sort of detail a recovery
 rate hides: median test error improved on two of three problems
-(`trigonometric` 0.44 â†’ 0.22, `nested` 0.39 â†’ 0.21) while recovery did not. On
+(`trigonometric` 0.44 → 0.22, `nested` 0.39 → 0.21) while recovery did not. On
 20 seeds that may be noise, and recovery is the headline metric, so this is not
-being claimed as a win â€” only noted so it can be checked again if the option is
+being claimed as a win — only noted so it can be checked again if the option is
 ever revisited.
 
 The flag is kept, defaulting **off**, which also keeps every number in this
 section exactly reproducible.
 
 **Elite distinctness verified by direct test (2026-08-18); the null stands.**
-A null result is only as trustworthy as the implementation that produced it â€”
+A null result is only as trustworthy as the implementation that produced it —
 had `lexicaseElites` silently returned the same individual in every slot, the
 "no effect" reading would have been measuring a collapsed elite set rather than
 the mechanism. `LexicaseSpec` now covers distinctness against a pool where one
@@ -638,21 +716,21 @@ deliberately neutered, so they are checking what they claim to rather than
 passing vacuously.
 
 **Cost is the real objection.** Lexicase examines the whole population at every
-selection event, of which there is one per offspring, making it O(popÂ²) per
+selection event, of which there is one per offspring, making it O(pop²) per
 generation where tournament is O(pop):
 
 | population | generations | tournament | lexicase | ratio |
 |---|---|---|---|---|
-| 100 | 10 | 0.07s | 0.51s | 7Ã— |
-| 200 | 40 | 0.55s | 7.8s | 14Ã— |
-| 500 | 80 | 3.2s | 129s | 40Ã— |
+| 100 | 10 | 0.07s | 0.51s | 7× |
+| 200 | 40 | 0.55s | 7.8s | 14× |
+| 500 | 80 | 3.2s | 129s | 40× |
 
 The ratio grows with population and no constant-factor work removes it. At the
 suite's usual population of 500 a 20-seed comparison would take about six hours
 per arm. `docs/phase1-lexicase-design.md` records the two performance bugs
-found and fixed on the way here â€” an `O(caseIndex)` list lookup, and a
-`newtype` that defeated the per-generation sharing it existed to provide â€” plus
-why dynamic Îµ was abandoned for semi-dynamic.
+found and fixed on the way here — an `O(caseIndex)` list lookup, and a
+`newtype` that defeated the per-generation sharing it existed to provide — plus
+why dynamic ε was abandoned for semi-dynamic.
 
 ### Does frequency seeding help?
 
@@ -691,7 +769,7 @@ initialisation removes the hard part.
 #### The `mixed` prediction, and the half of it that was wrong
 
 `docs/phase2-spectral-design.md` open question 2 predicted before the run that
-`mixed` â€” `2xÂ² + exp(-x) + sin(y)` â€” would see no benefit, because the `x`
+`mixed` — `2x² + exp(-x) + sin(y)` — would see no benefit, because the `x`
 terms are far larger than the unit-amplitude `sin(y)` and are not linear in
 `y`, so detrending cannot remove them and the real signal stays buried.
 
@@ -701,7 +779,7 @@ detector genuinely does not find `sin(y)`, and `SpectralSpec` now asserts that.
 **The strong form was wrong.** It predicted the two arms would be *identical*,
 since a detector finding nothing makes seeding inert. They were not identical,
 which sent me back to look, and the reason was a variable the prediction never
-considered: the detector fires **spuriously on `x`**. `2xÂ² + exp(-x)` has no
+considered: the detector fires **spuriously on `x`**. `2x² + exp(-x)` has no
 periodicity at all, but it is not flat after linear detrending either, and its
 residual has enough curvature to push a peak past the threshold. Seeding then
 biases trig arguments towards a frequency that does not exist in the target.
@@ -716,19 +794,19 @@ That points at the real limitation. The spectrum is computed against the raw
 target, so every variable is analysed as though it were the only one. The fix
 is to analyse the *residual* after removing what the other variables explain,
 which is a Phase 2.5 change rather than a tweak to this one. Raising the
-threshold is not the fix â€” it would suppress the spurious `x` peak and the
+threshold is not the fix — it would suppress the spurious `x` peak and the
 genuine `trigonometric` peaks together.
 
 ### Does penalising domain violations help?
 
 Protected arithmetic keeps the search alive by substituting a sentinel when an
-expression leaves its domain â€” `1.0` for a division by zero, `log |x|` for a
+expression leaves its domain — `1.0` for a division by zero, `log |x|` for a
 log of a negative. That is what stops the search collapsing, and it is also a
 blind spot: an individual scoring well *because* it divides by zero on 40% of
 the data is indistinguishable from one that does not.
 
 `TypedGP.Eval.evalDomain` makes the difference visible, and `--domain-penalty`
-charges for it. **Default 0, which disables the check entirely** â€” at zero
+charges for it. **Default 0, which disables the check entirely** — at zero
 weight the traversal is skipped rather than run and multiplied out, so the
 engine's hot loop is untouched.
 
@@ -753,13 +831,13 @@ effect.
 
 | problem | penalty 0 | penalty 0.1 | delta | z | p |
 |---|---|---|---|---|---|
-| `rational` | 5% (1/20) | 0% (0/20) | âˆ’5pp | 1.01 | 0.31 |
-| `logarithmic` | 60% (12/20) | 50% (10/20) | âˆ’10pp | 0.64 | 0.52 |
-| **pooled** | 13/40 (32.5%) | 10/40 (25%) | **âˆ’7.5pp** | **0.74** | **0.46** |
+| `rational` | 5% (1/20) | 0% (0/20) | −5pp | 1.01 | 0.31 |
+| `logarithmic` | 60% (12/20) | 50% (10/20) | −10pp | 0.64 | 0.52 |
+| **pooled** | 13/40 (32.5%) | 10/40 (25%) | **−7.5pp** | **0.74** | **0.46** |
 
 **The penalty does not help, and the point estimate is negative.** Nothing
-here is significant â€” 0.46 pooled is a long way from any threshold, corrected
-or not â€” so the honest statement is "no measurable effect", not "it hurts".
+here is significant — 0.46 pooled is a long way from any threshold, corrected
+or not — so the honest statement is "no measurable effect", not "it hurts".
 But the direction is worth stating plainly rather than reporting the null and
 leaving the sign unmentioned: two problems out of two moved down.
 
@@ -768,26 +846,26 @@ against zero is below the count where a two-proportion z-test means anything;
 the normal approximation is not valid there and the number is printed for
 completeness, not for inference.
 
-Median tree size grew in both arms that had the penalty on (7 â†’ 9,
-18 â†’ 22), which is at least consistent with a mechanism: charging for domain
+Median tree size grew in both arms that had the penalty on (7 → 9,
+18 → 22), which is at least consistent with a mechanism: charging for domain
 violations pushes the search towards larger, more defensively-structured
 expressions. That is a hypothesis suggested by two data points, not a finding.
 
 #### So why keep it
 
 Because recovery rate was never the argument for it. `docs/phase2-design.md`
-Â§5 introduced domain validity as **a prerequisite for symbolic
+§5 introduced domain validity as **a prerequisite for symbolic
 differentiation**, not as a search improvement: a differentiation rule that is
 "valid only where `f > 0`" needs somewhere to put that condition, and a
 differentiator built on top of silently-clamped protected arithmetic will
 confidently differentiate wrong answers near domain boundaries. That is what
 this phase delivers, and it is unaffected by the penalty measuring nothing.
 
-The penalty itself stays at weight 0 â€” costing nothing, changing nothing, and
+The penalty itself stays at weight 0 — costing nothing, changing nothing, and
 available to anyone who wants to measure it on their own data.
 
 `docs/phase3-domain-design.md` records the one place the implementation
-deviates from Â§5's specification (`Invalid` must carry the protected fallback,
+deviates from §5's specification (`Invalid` must carry the protected fallback,
 or a tree traversal has no number to hand upward) and the open question that
 is now the leading suspect for the null: `Saturated` is far more common than
 the genuine domain errors, so a single weight may be measuring "does this
@@ -795,14 +873,14 @@ overflow" rather than "is this meaningful".
 
 ### Recovery rate was measuring the wrong thing, and here is what it was
 
-Three separate investigations â€” the Phase 1 lexicase-elites ablation, the
-Phase 3 stacked smoke test, and Phase 4's age-fitness result â€” each found
+Three separate investigations — the Phase 1 lexicase-elites ablation, the
+Phase 3 stacked smoke test, and Phase 4's age-fitness result — each found
 markedly better median error and smaller formulas at **identical recovery
 rate**. Three mechanisms, same signature, and `nested` recurring as the site
 of it. That is convergent enough to be a fact about the metric rather than
 three coincidences, so it was worth an afternoon.
 
-`nested` is `exp(sin(xÂ²))` â€” five nodes. Per-seed inspection of all 20 runs:
+`nested` is `exp(sin(x²))` — five nodes. Per-seed inspection of all 20 runs:
 
 | | recovery (nRMSE < 0.05) | **exact** (nRMSE < 1e-6) | approximations counted as recoveries |
 |---|---|---|---|
@@ -810,7 +888,7 @@ three coincidences, so it was worth an afternoon.
 | age-fitness | 14/20 (70%) | **14/20 (70%)** | **0** |
 
 Every one of age-fitness's fourteen recoveries is the law itself. Four of
-tournament's are not â€” they are sprawling curve fits that squeaked under a 5%
+tournament's are not — they are sprawling curve fits that squeaked under a 5%
 bar. This is one of them, scored as a recovery at nRMSE 0.0323:
 
 ```
@@ -820,17 +898,17 @@ sqrt(abs(abs(abs(abs(x / (0.7765 / x)) ^ 0.8178) ^ 2.3845 ^ sqrt(x))
 
 **The recovery threshold conflates "found the law" with "fitted it to within
 5%".** Mechanisms that improve solution quality convert approximations into
-exact laws â€” which moves median error and median size a great deal and moves
+exact laws — which moves median error and median size a great deal and moves
 a pass/fail count not at all, because both categories already pass. One
 explanation for all three prior observations.
 
 It also explains the median size gap: age-fitness's recoveries are all
 minimal (5 nodes), while tournament's four curve fits drag its median to 8.
 
-The engine finds the law in several spellings, all genuinely correct â€”
+The engine finds the law in several spellings, all genuinely correct —
 `exp(sin(x*x))`, `exp(sin(abs(x)^2))`, `2.7183^sin(x*x)`, and
-`abs(-6.6601)^(sin(x*x)*0.5274)`, which is `e^sin(xÂ²)` because
-`ln(6.6601) Ã— 0.5274 = 1.0000`.
+`abs(-6.6601)^(sin(x*x)*0.5274)`, which is `e^sin(x²)` because
+`ln(6.6601) × 0.5274 = 1.0000`.
 
 #### What changed as a result
 
@@ -860,7 +938,7 @@ Spot-checked at 8 seeds immediately after adding the column:
 | `trigonometric` | 100% | 100% | 0 |
 
 So `nested` was where the pattern was noticed, not where it lives.
-`polynomial` â€” `3xÂ² âˆ’ 2x + 7`, the most elementary problem in the suite â€”
+`polynomial` — `3x² − 2x + 7`, the most elementary problem in the suite —
 has a quarter of its "recoveries" being approximations. `trigonometric`
 has none, which is consistent: seeding hands it the exact frequency, so
 runs that succeed succeed exactly.
@@ -873,8 +951,8 @@ three phases to notice.
 **Every recovery-rate number recorded in this README predates the `exact`
 column.** They remain valid as recovery rates; they are simply not evidence
 about law-discovery. Notably, the comparisons that turned on *median error*
-rather than recovery â€” the lexicase-elites addendum, the stacked smoke test,
-the age-fitness `nested` row â€” were tracking the real effect all along, and
+rather than recovery — the lexicase-elites addendum, the stacked smoke test,
+the age-fitness `nested` row — were tracking the real effect all along, and
 were the ones flagged as puzzling at the time.
 
 ### Recovery rate hides things, and here is one of them
@@ -883,7 +961,7 @@ Recovery rate is a **threshold statistic**: it counts seeds whose normalised
 RMSE crossed 0.05, and says nothing about how close the rest came. Two arms
 with identical recovery can have completely different error distributions.
 
-This turned up twice â€” once in the Phase 1 lexicase-elites ablation (median
+This turned up twice — once in the Phase 1 lexicase-elites ablation (median
 test error improved on two of three problems while recovery did not move), and
 again in the Phase 3 stacked smoke test (in-domain error consistently better
 while recovery was flat-to-down). Two independent mechanisms producing the
@@ -910,7 +988,7 @@ stacked      0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000
 z = 2.65, p = 0.008.
 
 **The mass shifted down, uniformly, and eleven seeds went to exact recovery.**
-This is not a tail effect and it is not a few outliers dragging a median â€”
+This is not a tail effect and it is not a few outliers dragging a median —
 more than half the distribution collapsed to zero. Recovery rate was hiding a
 large, broad improvement.
 
@@ -921,19 +999,19 @@ did that; it was never powered to see an effect of this size, and reporting
 its flat rows as evidence of no effect would have been wrong.
 
 **Caveats, stated plainly.** `interaction` was chosen *because* it looked
-starkest in the smoke test, which is a selection effect â€” picking the most
+starkest in the smoke test, which is a selection effect — picking the most
 extreme-looking cell and then testing it inflates the apparent size. This is
 an **upper bound on one problem**, not a suite-wide estimate.
 
 And a correction to the framing above: the stacked arm varies **two** things,
 not three. Frequency seeding is on by default, so it was on in *both* arms and
 cannot explain the difference between them. (That is narrower than "seeding is
-not a factor" â€” it is closed properly by the second 2Ã—2 below, which varies
+not a factor" — it is closed properly by the second 2×2 below, which varies
 seeding directly and finds it worth exactly zero here.)
 
-#### Which mechanism? Two 2Ã—2s
+#### Which mechanism? Two 2×2s
 
-First, selection Ã— domain penalty, with seeding on throughout (20 seeds per
+First, selection × domain penalty, with seeding on throughout (20 seeds per
 cell). **Measured before the `Pow` semantics change:**
 
 | | penalty 0 | penalty 0.1 |
@@ -941,7 +1019,7 @@ cell). **Measured before the `Pow` semantics change:**
 | **tournament** | 3/20 (15%) | 3/20 (15%) |
 | **lexicase** | 11/20 (55%) | 11/20 (55%) |
 
-The domain penalty moves recovery by exactly zero in both selection regimes â€”
+The domain penalty moves recovery by exactly zero in both selection regimes —
 a second, independent confirmation of the null measured on `rational` and
 `logarithmic`.
 
@@ -949,7 +1027,7 @@ That left one thing unclosed, and the first version of this section
 overstated it: seeding was on in **all four** cells, so while it could not
 explain the *difference* between arms, nothing established that it
 contributes nothing on its own, or that lexicase's effect does not depend on
-it. Selection Ã— seeding, penalty 0 throughout, **all four cells re-run after
+it. Selection × seeding, penalty 0 throughout, **all four cells re-run after
 the `Pow` change**:
 
 | | seeding off | seeding on | row total |
@@ -958,11 +1036,11 @@ the `Pow` change**:
 | **lexicase** | **12/20 (60%)** | **11/20 (55%)** | **23/40 (57.5%)** |
 | column total | 14/40 (35%) | 14/40 (35%) | |
 
-**Lexicase: +45pp, z = 4.22, p â‰ˆ 0.00002.**
-**Seeding: 14/40 either way â€” a delta of exactly zero, z = 0.00.**
+**Lexicase: +45pp, z = 4.22, p ≈ 0.00002.**
+**Seeding: 14/40 either way — a delta of exactly zero, z = 0.00.**
 
 Lexicase reaches 60% with seeding *off*, so the effect does not depend on it
-in any way. Seeding's two within-row deltas (+5pp under tournament, âˆ’5pp under
+in any way. Seeding's two within-row deltas (+5pp under tournament, −5pp under
 lexicase) are one seed each and point in opposite directions.
 
 That null is the expected result rather than a disappointment: `interaction`'s
@@ -971,14 +1049,14 @@ and seeding should be inert.
 
 Seen together with the frequency-seeding table above, seeding has now been
 measured on four problems: **one strong positive where periodicity is present
-(`trigonometric`, 35% â†’ 100%, z = 4.39) and three correct nulls where it is
+(`trigonometric`, 35% → 100%, z = 4.39) and three correct nulls where it is
 not (`mixed`, `nested`, `interaction`).** A mechanism that fires hard exactly
 where its precondition holds and is inert everywhere else is the shape a
-working detector should produce â€” and it is a more convincing result than the
+working detector should produce — and it is a more convincing result than the
 `trigonometric` number alone, because the nulls are what rule out "it perturbs
 the search and sometimes that helps".
 
-**All three toggles are now characterised on this problem** â€” lexicase +45pp
+**All three toggles are now characterised on this problem** — lexicase +45pp
 and highly significant, seeding exactly 0, domain penalty exactly 0. The
 caveat from above still applies in full: `interaction` was chosen *because* it
 looked starkest, so +45pp is an **upper bound on one problem**, not a
@@ -1000,14 +1078,14 @@ front (`front`). Shares are of *invalid* evaluations.
 
 The hypothesis going in was that `Saturated` would swamp the rest, making a
 single penalty weight measure "does this overflow" rather than "is this
-meaningful". **That was wrong.** Saturation is 1â€“16% of generation zero and
+meaningful". **That was wrong.** Saturation is 1–16% of generation zero and
 **0% of every surviving front**.
 
-What dominates is `PowOfNegativeBase` â€” around 60% of generation zero on every
+What dominates is `PowOfNegativeBase` — around 60% of generation zero on every
 problem, and **100% of the invalid evaluations among final-front individuals**
 on `exponential`, `mixed` and `nested`.
 
-| problem | sample | invalid% | div0 | logâ‰¤0 | pow<0 | saturated |
+| problem | sample | invalid% | div0 | log≤0 | pow<0 | saturated |
 |---|---|---|---|---|---|---|
 | `exponential` | front | 15% | 0% | 0% | **100%** | 0% |
 | `logarithmic` | front | 1% | 0% | 100% | 0% | 0% |
@@ -1015,8 +1093,8 @@ on `exponential`, `mixed` and `nested`.
 | `nested` | front | **75%** | 0% | 0% | **100%** | 0% |
 
 On `nested`, three quarters of the reported front's evaluations are out of
-domain. That is the scenario `docs/phase2-design.md` Â§5 was written about â€”
-"an individual scoring well *because* it divides by zero on 40% of the data" â€”
+domain. That is the scenario `docs/phase2-design.md` §5 was written about —
+"an individual scoring well *because* it divides by zero on 40% of the data" —
 arriving through `Pow` instead of `Div`, at nearly twice the illustrative
 rate.
 
@@ -1027,30 +1105,30 @@ real fronts:
 
 | as it used to print | what it actually computes |
 |---|---|
-| `sin(x) ^ 1.1114` | `\|sin x\| ^ 1.1114` â€” a rectified sine |
-| `(-0.6219) ^ y` | `0.6219 ^ y` â€” an exponential decay |
+| `sin(x) ^ 1.1114` | `\|sin x\| ^ 1.1114` — a rectified sine |
+| `(-0.6219) ^ y` | `0.6219 ^ y` — an exponential decay |
 
 Both read as broken output and are legitimate discoveries. **The
 pretty-printer now renders the absolute value** where it changes the meaning
-â€” when the exponent is a literal non-integer and the base is not provably
-non-negative â€” so `sin(x) ^ 1.1114` prints as `abs(sin(x)) ^ 1.1114`. It is
+— when the exponent is a literal non-integer and the base is not provably
+non-negative — so `sin(x) ^ 1.1114` prints as `abs(sin(x)) ^ 1.1114`. It is
 deliberately conservative: `abs(x) ^ 1.1`, `(x * x) ^ 0.5` and
 `sin(x) ^ 3` are all left alone, because in those cases the absolute value
 would be noise or an outright lie.
 
 Chasing the second row turned up something nobody designed. `protectedPow`
 keeps the sign for integer exponents and drops it otherwise, so `(-0.6) ^ y`
-is **discontinuous at every integer `y`** â€” `+0.36` at 2, `-0.216` at 3,
+is **discontinuous at every integer `y`** — `+0.36` at 2, `-0.216` at 3,
 `+0.6^2.5` at 2.5. On continuous data those points have measure zero, which is
 why it went unnoticed. It is not something to build a differentiator on.
 
-`docs/phase5-pow-semantics.md` weighs the two ways out â€” reinterpret `Pow` as
-`|base| ^ expo`, or split it and keep textbook exponentiation â€” and recommends
+`docs/phase5-pow-semantics.md` weighs the two ways out — reinterpret `Pow` as
+`|base| ^ expo`, or split it and keep textbook exponentiation — and recommends
 reinterpreting, with the cost (`(-2)^3` becomes `+8`) stated rather than
 buried.
 
 Separately, `Saturated` has been **formally amended out of the domain-error
-family** in `docs/phase2-design.md` Â§5. It is a numeric-range condition, not a
+family** in `docs/phase2-design.md` §5. It is a numeric-range condition, not a
 domain condition: `exp(1000)` is perfectly well defined and perfectly
 differentiable, and only the magnitude cap truncated it. Anything asking "is
 this meaningful here" must exclude it.
@@ -1058,7 +1136,7 @@ this meaningful here" must exclude it.
 ### Symbolic differentiation
 
 `TypedGP.Differentiate.differentiate :: VarName -> Expr -> Maybe Expr`
-produces a *formula*, not a number. That is the point â€” a finite-difference
+produces a *formula*, not a number. That is the point — a finite-difference
 routine gives a function you can sample, while this gives an expression you
 can simplify, print, or compare against derivative observations.
 
@@ -1071,30 +1149,30 @@ refuses on `zeta` is more useful than one that lies about it.
 
 **Where a derivative is valid needs no separate machinery.** The derivative is
 itself an `Expr`, so `evalDomain` applied to it reports exactly where it is
-meaningful â€” a quotient rule's `b = 0` surfaces as `DividedByZero` from the
+meaningful — a quotient rule's `b = 0` surfaces as `DividedByZero` from the
 `Div` the rule emitted. `Saturated` must be excluded when asking, since a
 derivative that merely got large is still the right derivative.
 
 #### The `Pow` rules changed, and two of the three got better
 
-`docs/phase2-design.md` Â§1 specified these before `Pow` was redefined as
+`docs/phase2-design.md` §1 specified these before `Pow` was redefined as
 `|base| ^ expo`. All three cases needed amending:
 
-| case | Â§1 as written | after the semantics change |
+| case | §1 as written | after the semantics change |
 |---|---|---|
-| constant exponent | `n Â· f^(n-1) Â· f'` | **wrong for odd `n`** â€” is `c Â· f Â· \|f\|^(c-2) Â· f'` |
-| constant base | valid only `a > 0`, else `Nothing` | valid for all `a â‰  0` |
-| both symbolic | `Nothing` | expressible, valid for `f â‰  0` |
+| constant exponent | `n · f^(n-1) · f'` | **wrong for odd `n`** — is `c · f · \|f\|^(c-2) · f'` |
+| constant base | valid only `a > 0`, else `Nothing` | valid for all `a ≠ 0` |
+| both symbolic | `Nothing` | expressible, valid for `f ≠ 0` |
 
-The first is a genuine trap: `n Â· f^(n-1) Â· f'` assumes `Pow f n = f^n`, and
-under `|f|^n` it is wrong whenever `n` is odd â€” while agreeing for even `n`,
+The first is a genuine trap: `n · f^(n-1) · f'` assumes `Pow f n = f^n`, and
+under `|f|^n` it is wrong whenever `n` is odd — while agreeing for even `n`,
 which is exactly how it would survive casual testing.
 
 The other two improve for one reason worth stating: **`Log` in this AST is
 already `log|x|`**, which is precisely the factor the general power rule
 needs. The `f > 0` restriction that forced `Nothing` was an artefact of
 pairing an unprotected `log` with a protected `Pow`. Reinterpreting `Pow`
-didn't only remove a discontinuity â€” it made the general rule expressible in
+didn't only remove a discontinuity — it made the general rule expressible in
 the AST's own operators.
 
 #### How it is tested
@@ -1112,7 +1190,7 @@ function, and comparing there would test nothing except that protection
 exists. A separate assertion requires at least 300 surviving points, so the
 test cannot pass by skipping everything.
 
-Verified by mutation: replacing the power rule with Â§1's textbook form fails
+Verified by mutation: replacing the power rule with §1's textbook form fails
 **6 assertions**, including the random property.
 
 ```
@@ -1124,8 +1202,8 @@ Verified by mutation: replacing the power rule with Â§1's textbook form fails
 [FAIL] symbolic and numeric derivatives agree on random expressions
 ```
 
-**Not yet built:** `canonicalize`, listed alongside differentiation in Â§1's
-recommended order. Nothing consumes derivatives yet either â€” the roadmap's
+**Not yet built:** `canonicalize`, listed alongside differentiation in §1's
+recommended order. Nothing consumes derivatives yet either — the roadmap's
 derivative-aware fitness is a separate piece, and computing derivatives for
 every individual every generation on the off-chance would be the wrong
 default.
@@ -1139,7 +1217,7 @@ parsimony, crowding distance and lexicase all preserve variation that already
 exists, while this one keeps introducing new variation after generation 0.
 
 20 seeds per cell. Two elitism settings, because the Phase 1 ablation showed
-scalar elitism can do more work than the strategy under test â€” and under AFPO
+scalar elitism can do more work than the strategy under test — and under AFPO
 it preserves the oldest fittest lineages every generation, in direct tension
 with the mechanism.
 
@@ -1156,8 +1234,8 @@ with the mechanism.
 Pooled at elitism 0: +6.25pp, z = 0.83, p = 0.41.**
 
 **This is a null, in both elitism regimes.** Neither pooled comparison is
-close to significance, and the elitism arm â€” included specifically because it
-was the confound that overturned a Phase 1 conclusion â€” does not rescue it.
+close to significance, and the elitism arm — included specifically because it
+was the confound that overturned a Phase 1 conclusion — does not rescue it.
 
 #### Checking the pre-registered prediction
 
@@ -1166,21 +1244,21 @@ on `trigonometric` or `nested`; weak prior, null likely.*
 
 | predicted | observed (elitism 2) | verdict |
 |---|---|---|
-| help on `rational` | 0% â†’ 20% | right direction, not significant, sparse cell |
-| help on `mixed` | 25% â†’ 15% | **wrong direction** |
-| nothing on `trigonometric` | 95% â†’ 95% | correct |
-| nothing on `nested` | 70% â†’ 70% | correct |
+| help on `rational` | 0% → 20% | right direction, not significant, sparse cell |
+| help on `mixed` | 25% → 15% | **wrong direction** |
+| nothing on `trigonometric` | 95% → 95% | correct |
+| nothing on `nested` | 70% → 70% | correct |
 
 Half right. Both predicted nulls held; of the two predicted positives, one
-moved up and one moved down. `rational` going 0/20 â†’ 4/20 is the largest
+moved up and one moved down. `rational` going 0/20 → 4/20 is the largest
 single movement in the table and is exactly the shape AFPO is supposed to
-produce â€” but 0 versus 4 successes is below where a two-proportion test means
+produce — but 0 versus 4 successes is below where a two-proportion test means
 anything, which is why both cells carry the sparse marker.
 
 #### The cost, which matters for a null
 
-Age-fitness is **3â€“13Ã— slower** per run: `rational` 1.96s â†’ 26.6s,
-`nested` 5.16s â†’ 17.8s. It inherits NSGA-II's O(populationÂ²) non-dominated
+Age-fitness is **3–13× slower** per run: `rational` 1.96s → 26.6s,
+`nested` 5.16s → 17.8s. It inherits NSGA-II's O(population²) non-dominated
 sort, the same cost `--selection pareto` pays. A mechanism that is
 statistically indistinguishable from tournament and an order of magnitude
 more expensive is not one to switch on by default, and it is not.
@@ -1188,7 +1266,7 @@ more expensive is not one to switch on by default, and it is not.
 #### One signal worth recording, which is not a recovery result
 
 On `nested`, age-fitness reaches **median test error 0.0000 and median
-extrapolation error 0.0000** against tournament's 0.0043 / 0.0031 â€” at
+extrapolation error 0.0000** against tournament's 0.0043 / 0.0031 — at
 identical 70% recovery, with **median size 5 against 8**. The same holds at
 elitism 0.
 
@@ -1203,45 +1281,45 @@ set out to measure.
 
 Measured properly: 20 seeds, both arms from the same binary, differing only in
 `--no-refine`. The control reproduced the pre-`LocalSearch` numbers *exactly*,
-digit for digit, on all nine problems â€” which confirms both that refinement
+digit for digit, on all nine problems — which confirms both that refinement
 consumes no randomness and that nothing else changed underneath the comparison.
 
 | | recovery | test nRMSE | extrapolation | nodes |
 |---|---|---|---|---|
-| polynomial | 80 â†’ 80% | 0.0174 â†’ **0.0045** | 0.1439 â†’ **0.0080** | 30 â†’ **18** |
-| power-law | 100 â†’ 100% | 0.0078 â†’ 0.0058 | 0.2080 â†’ 0.1936 | 21 â†’ 19 |
-| exponential | 80 â†’ **85%** | 0.0288 â†’ 0.0213 | 1.0243 â†’ 0.9025 | 20 â†’ 18 |
-| logarithmic | 60 â†’ **70%** | 0.0405 â†’ 0.0278 | 5.6104 â†’ 4.6854 | 20 â†’ 19 |
-| trigonometric | 20 â†’ **35%** | 0.4696 â†’ 0.4277 | 0.4961 â†’ 0.4518 | 14 â†’ 14 |
-| mixed | 5 â†’ **15%** | 0.0999 â†’ 0.1010 | 0.4765 â†’ 0.3891 | 30 â†’ **24** |
-| interaction | 80 â†’ **85%** | 0.0000 â†’ 0.0000 | 0.0000 â†’ 0.0000 | 6 â†’ 6 |
-| rational | 0 â†’ 5% | 0.1472 â†’ 0.1819 | 4.0525 â†’ 4.5861 | 6 â†’ 12 |
-| nested | 70 â†’ **55%** | 0.0022 â†’ 0.0153 | 0.0037 â†’ 0.0630 | 6 â†’ 8 |
-| **pooled** | 55.0 â†’ 58.9% | | | 153 â†’ 138 |
+| polynomial | 80 → 80% | 0.0174 → **0.0045** | 0.1439 → **0.0080** | 30 → **18** |
+| power-law | 100 → 100% | 0.0078 → 0.0058 | 0.2080 → 0.1936 | 21 → 19 |
+| exponential | 80 → **85%** | 0.0288 → 0.0213 | 1.0243 → 0.9025 | 20 → 18 |
+| logarithmic | 60 → **70%** | 0.0405 → 0.0278 | 5.6104 → 4.6854 | 20 → 19 |
+| trigonometric | 20 → **35%** | 0.4696 → 0.4277 | 0.4961 → 0.4518 | 14 → 14 |
+| mixed | 5 → **15%** | 0.0999 → 0.1010 | 0.4765 → 0.3891 | 30 → **24** |
+| interaction | 80 → **85%** | 0.0000 → 0.0000 | 0.0000 → 0.0000 | 6 → 6 |
+| rational | 0 → 5% | 0.1472 → 0.1819 | 4.0525 → 4.5861 | 6 → 12 |
+| nested | 70 → **55%** | 0.0022 → 0.0153 | 0.0037 → 0.0630 | 6 → 8 |
+| **pooled** | 55.0 → 58.9% | | | 153 → 138 |
 
-**Do not read the recovery column as a proven win.** Pooled, that is 99 â†’ 106
-successes out of 180, a 3.9 point gain at **z â‰ˆ 0.75 (p â‰ˆ 0.46)** â€” comfortably
+**Do not read the recovery column as a proven win.** Pooled, that is 99 → 106
+successes out of 180, a 3.9 point gain at **z ≈ 0.75 (p ≈ 0.46)** — comfortably
 inside noise. Every individual problem's change is inside noise too, including
 the `nested` regression. A sign test over the seven problems that moved (six up,
-one down) gives p â‰ˆ 0.13: suggestive, not established.
+one down) gives p ≈ 0.13: suggestive, not established.
 
 The continuous metrics carry more weight, because a median over 20 seeds has far
 more statistical power than a binary rate over the same runs:
 
-- **`polynomial` improves 3.9Ã— on in-domain error and 18Ã— on extrapolation while
+- **`polynomial` improves 3.9× on in-domain error and 18× on extrapolation while
   shrinking from 30 nodes to 18.** That combination is the mechanism visible in
   the data: with accurate constants the search stops spending nodes to
   compensate for bad ones.
-- Total median complexity across the suite falls 153 â†’ 138 nodes. Simplification
+- Total median complexity across the suite falls 153 → 138 nodes. Simplification
   was a side effect, not the goal.
-- Cost is **+14% wall clock** (3.32s â†’ 3.78s median per run), which is a good
+- Cost is **+14% wall clock** (3.32s → 3.78s median per run), which is a good
   trade for the error reduction.
 
 **`nested` is the one that got worse on every metric**, and it should not be
-waved away. `exp(sin(xÂ²))` has essentially no free constants in its ideal form,
+waved away. `exp(sin(x²))` has essentially no free constants in its ideal form,
 so refinement cannot help it, while sharpening the elites raises selection
 pressure toward them and plausibly costs the diversity that problem needs. That
-is a hypothesis; the 15-point drop is itself within noise (z â‰ˆ 1.0).
+is a hypothesis; the 15-point drop is itself within noise (z ≈ 1.0).
 
 ### Does hoist mutation help?
 
@@ -1258,10 +1336,10 @@ with enough structure to bloat:
 
 This is the first evidence that hoist mutation does anything at the population
 level. It was introduced on a mechanism argument, and two earlier attempts to
-measure it â€” both against the six-node demo problem â€” found nothing either way.
+measure it — both against the six-node demo problem — found nothing either way.
 
 Read it carefully, though. The pooled difference between 0.0 and 0.10 is 12.5
-percentage points on 80 runs per arm, which is **z â‰ˆ 1.6, p â‰ˆ 0.11** â€” short of
+percentage points on 80 runs per arm, which is **z ≈ 1.6, p ≈ 0.11** — short of
 conventional significance. What makes it more than nothing is the consistency:
 0.10 is best or tied on all four problems, and those problems are independent.
 Suggestive, not settled; it would take a few hundred seeds to call properly.
@@ -1269,12 +1347,12 @@ Suggestive, not settled; it would take a few hundred seeds to call properly.
 Two things worth noting about *how* it appears to help:
 
 - **Not by shrinking trees.** Median node counts do not fall with hoist share
-  (polynomial 25 â†’ 30 â†’ 24; nested 11 â†’ 6 â†’ 18). Whatever is happening is not
+  (polynomial 25 → 30 → 24; nested 11 → 6 → 18). Whatever is happening is not
   the bloat control the operator was nominally added for.
-- **The biggest single gain is on `nested`** (`exp(sin(x^2))`), 55% â†’ 70% â€” a
+- **The biggest single gain is on `nested`** (`exp(sin(x^2))`), 55% → 70% — a
   problem that is *entirely* about nested wrappers. That matches hoist's
   original motivation exactly: it was built to turn `sin(sin(y))` into `sin(y)`
   in one move, which no other operator can do.
 
-The default is 0.10, which this supports â€” but it was chosen before this
+The default is 0.10, which this supports — but it was chosen before this
 evidence existed, so treat the agreement as luck rather than as vindication.

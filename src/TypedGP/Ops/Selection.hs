@@ -45,9 +45,10 @@ module TypedGP.Ops.Selection
   ) where
 
 import Data.List (sortOn, transpose)
+import GHC.Arr (Array, listArray, numElements, unsafeAt)
 
 import TypedGP.Config (Config (..), SelectionStrategy (..))
-import TypedGP.Random (Seed, nextDouble, pick, shuffle)
+import TypedGP.Random (Seed, nextDouble, nextInt, pick, shuffle)
 
 -- | Anything paired with a fitness score.
 data Scored a = Scored
@@ -79,9 +80,13 @@ data Scored a = Scored
 --
 -- 'Nothing' for an empty pool — callers must decide what an empty
 -- population means rather than receiving a crash.
-select :: Config -> SelectionContext -> [Scored a] -> Seed -> Maybe (a, Seed)
+--
+-- @context@ must have been built from @pool@ by 'selectionContext'. The
+-- tournament strategies draw from the context's array copy of the pool
+-- rather than from the list; see 'ctxPool'.
+select :: Config -> SelectionContext a -> [Scored a] -> Seed -> Maybe (a, Seed)
 select cfg context pool s0 = case cfgSelection cfg of
-  Tournament          -> tournamentSelection (cfgTournamentSize cfg) pool s0
+  Tournament          -> tournamentFrom (cfgTournamentSize cfg) (ctxPool context) s0
   FitnessProportional -> fitnessProportionalSelection pool s0
   -- Pareto mode runs the same tournament, but over a different score:
   -- "TypedGP.Population" fills 'scoredFitness' with the crowded-comparison
@@ -90,13 +95,13 @@ select cfg context pool s0 = case cfgSelection cfg of
   -- distance as the tie-break — so no separate mechanism is needed here.
   -- Keeping it shared also means Pareto mode inherits the existing
   -- empty-pool and sampling behaviour rather than reimplementing it.
-  Pareto              -> tournamentSelection (cfgTournamentSize cfg) pool s0
+  Pareto              -> tournamentFrom (cfgTournamentSize cfg) (ctxPool context) s0
   -- Same mechanism as Pareto, over a different objective pair:
   -- 'TypedGP.Population' fills 'scoredFitness' from (error, age) instead
   -- of (error, size). The selector itself is identical because NSGA-II's
   -- selection operator is "tournament on the crowded-comparison key"
   -- regardless of what the objectives are.
-  AgeFitness          -> tournamentSelection (cfgTournamentSize cfg) pool s0
+  AgeFitness          -> tournamentFrom (cfgTournamentSize cfg) (ctxPool context) s0
   Lexicase            -> selectLexicase cfg (ctxCases context) pool s0
 
 -- | Draw @k@ candidates with replacement and return the best.
@@ -105,23 +110,53 @@ select cfg context pool s0 = case cfgSelection cfg of
 -- walk, large @k@ converges fast and loses diversity. Sampling /with/
 -- replacement is intentional — it keeps each draw independent, so the
 -- pressure does not drift as the pool is consumed.
-tournamentSelection :: forall a. Int -> [Scored a] -> Seed -> Maybe (a, Seed)
-tournamentSelection k pool s0
-  | null pool = Nothing
+--
+-- Takes a list for convenience; it builds the array itself, which is O(n)
+-- per call. The engine instead calls 'tournamentFrom' on the array that
+-- 'selectionContext' builds once per generation.
+tournamentSelection :: Int -> [Scored a] -> Seed -> Maybe (a, Seed)
+tournamentSelection k pool = tournamentFrom k (poolArray pool)
+
+-- | 'tournamentSelection' over an array, so each draw is O(1).
+--
+-- Consumes exactly the random numbers 'TypedGP.Random.pick' would — one
+-- @nextInt size@ per draw, then the element at that index — so moving
+-- from the list to the array changes no run's results. That was checked by
+-- reproducing the benchmark suite bit-for-bit.
+tournamentFrom :: forall a. Int -> Array Int (Scored a) -> Seed -> Maybe (a, Seed)
+tournamentFrom k pool s0
+  | size == 0 = Nothing
   | otherwise = go (max 1 k) Nothing s0
   where
+    size :: Int
+    size = numElements pool
+
     go :: Int -> Maybe (Scored a) -> Seed -> Maybe (a, Seed)
     go 0 champion st = fmap (\c -> (scoredValue c, st)) champion
-    go rounds champion st = case pick pool st of
-      Just (entrant, st') -> go (rounds - 1) (Just (better entrant champion)) st'
-      -- Unreachable: pool is non-empty, checked above.
-      Nothing -> fmap (\c -> (scoredValue c, st)) champion
+    go rounds champion st =
+      let (i, st') = nextInt size st
+      in case entryAt i of
+           Just entrant -> go (rounds - 1) (Just (better entrant champion)) st'
+           -- Unreachable: nextInt returns an index inside [0, size).
+           Nothing -> fmap (\c -> (scoredValue c, st)) champion
+
+    -- Bounds-checked, so an out-of-range index is a 'Nothing' rather than
+    -- a crash. 'unsafeAt' is only reached with the index proven in range.
+    entryAt :: Int -> Maybe (Scored a)
+    entryAt i
+      | i >= 0 && i < size = Just (unsafeAt pool i)
+      | otherwise          = Nothing
 
     better :: Scored a -> Maybe (Scored a) -> Scored a
     better entrant Nothing = entrant
     better entrant (Just champion)
       | scoredFitness entrant < scoredFitness champion = entrant
       | otherwise                                      = champion
+
+-- | A pool as a zero-indexed array. Total: an empty pool gives an empty
+-- array, which 'tournamentFrom' answers with 'Nothing'.
+poolArray :: [Scored a] -> Array Int (Scored a)
+poolArray pool = listArray (0, length pool - 1) pool
 
 -- | Roulette wheel over weights @1 / (1 + fitness)@.
 --
@@ -182,8 +217,15 @@ fitnessProportionalSelection pool s0
 -- This was measured, not guessed: as a newtype the benchmark did not
 -- finish two seeds in nine minutes; the cost model said it should take
 -- about ten seconds.
-data SelectionContext = SelectionContext
-  { ctxCases :: ![(Double, [Double])]
+data SelectionContext a = SelectionContext
+  { ctxPool :: !(Array Int (Scored a))
+    -- ^ The pool as an array, for tournament draws.
+    --
+    -- Drawing from the list cost a 'length' and a walk to the index on
+    -- every draw, which is several list traversals per selection event and
+    -- about a thousand selection events per generation. The profiler put
+    -- that at 11% of runtime. Built once here, each draw is O(1).
+  , ctxCases :: ![(Double, [Double])]
     -- ^ One entry per training case: its epsilon band, and every
     -- candidate's error on it __in pool order__.
     --
@@ -210,9 +252,10 @@ data SelectionContext = SelectionContext
 -- is measured from still comes from the surviving pool, which is what the
 -- name means and what La Cava et al. (2016) report as generally the
 -- strongest of the three variants anyway.
-selectionContext :: [Scored a] -> SelectionContext
+selectionContext :: [Scored a] -> SelectionContext a
 selectionContext pool = SelectionContext
-  { ctxCases = [(medianAbsoluteDeviation row, row) | row <- caseRows]
+  { ctxPool = poolArray pool
+  , ctxCases = [(medianAbsoluteDeviation row, row) | row <- caseRows]
   }
   where
     -- 'transpose' truncates to the shortest input row, so a malformed pool
@@ -340,7 +383,7 @@ narrowByCases cfg cases mask0 s0 =
 -- every elite slot and collapse the very diversity elitism is meant to
 -- carry forward.
 lexicaseElites
-  :: forall a. Config -> SelectionContext -> [Scored a] -> Int -> Seed -> ([a], Seed)
+  :: forall a. Config -> SelectionContext a -> [Scored a] -> Int -> Seed -> ([a], Seed)
 lexicaseElites cfg context pool wanted s0
   | wanted <= 0 || null pool = ([], s0)
   | otherwise = go wanted (map (const True) pool) s0 []
